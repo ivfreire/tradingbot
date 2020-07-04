@@ -1,1 +1,4 @@
+matplotlib
+numpy
+pandas
 alpaca_trade_api
