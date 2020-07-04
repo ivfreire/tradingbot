@@ -1,24 +1,31 @@
 # Copyright (c) 2020 Icaro Freire
 
-import sys
-import finnhub
+import alpaca_trade_api as tradeapi
 
-# StocksAPI is the interface controller between our wallet of investiments and the Finnhub API
+# StocksAPI is the interface controller between our wallet of investiments and the Alpaca API
 class StocksAPI:
-    def __init__(self, apiKey):
-        self.configuration = finnhub.Configuration(api_key={ 'token': apiKey })
-        print('Using api_key: {} to connect'.format(apiKey))
-        self.client = finnhub.DefaultApi(finnhub.ApiClient(self.configuration))
-        if self.client: print('Connected to Finnhub API successfully!')
-
+    def __init__(self):
+        self.api = tradeapi.REST('API-KEY', 'API-SECRET-KEY', 'URL')
         self.stocks = {}
-
         return
 
     # Gets the historical values highes, lows, openings and closures of the specified stock
-    def get_history(self, ticker, resolution, fromdate, todate):
-        query = self.client.stock_candles(ticker, resolution, fromdate, todate)
-        self.stocks[ticker] = query
+    def get_history(self, ticker, resolution, start=None, end=None, limit=None):
+        barset = self.api.get_barset(ticker, resolution, limit, start, end, None, None)[ticker]
+        stocks = { 'o': [], 'c': [], 'h': [], 'l': [], 'v': [], 't': [] }
+        for bar in barset:
+            stocks['o'].append(bar.o)
+            stocks['c'].append(bar.c)
+            stocks['h'].append(bar.h)
+            stocks['l'].append(bar.l)
+            stocks['v'].append(bar.v)
+            stocks['t'].append(bar.t)
+        return stocks
+
+    def load(self, ticker, resolution, start=None, end=None, limit=None):
+        stocks = self.get_history(ticker, resolution, start, end, limit)
+        self.stocks[ticker] = stocks
+        return
 
     # Returns the current price of the specified stock. Usage on realtime mode only.
     def price(self, ticker):
@@ -28,14 +35,22 @@ class StocksAPI:
 
 # Wallet is the class that controls our money and stocks owned
 class Wallet:
-    def __init__(self, balance):
-        self.balance = balance
+    def __init__(self, account):
+        self.get_account(account)
         self.stocks = {}
         return
 
-    # Add the stock bought to our wallet and discounts the transaction money from our balance
+    # Updates local wallet from the Alpaca API
+    def get_account(self, account):
+        self.buying_power = account.buying_power
+        self.currency = account.currency
+        self.equity = account.equity
+        self.last_equity = account.last_equity
+        return
+
+    # Add the stock bought to our wallet and discounts the transaction money from our buying_power
     def buy(self, ticker, amount, price):
-        if self.balance >= amount * price:
+        if self.buying_power >= amount * price:
             if ticker in self.stocks:
                 self.stocks[ticker].avg_price = (self.stocks[ticker].amount * self.stocks[ticker].avg_price + amount * price) / (self.stocks[ticker].amout + amount)
                 self.stocks[ticker].amount += amount
@@ -43,7 +58,7 @@ class Wallet:
                 'amount': amount,
                 'avg_price': price
             }
-            self.balance -= amount * price
+            self.buying_power -= amount * price
         else: return False
         return
 
@@ -51,9 +66,16 @@ class Wallet:
     def sell(self, ticker, amount, price):
         if self.stocks[ticker].amount >= amount:
             self.stocks[ticker].amount -= amount
-            self.balance -= amount * price
+            self.buying_power -= amount * price
             return
         return False
+
+    # Paper-trading
+    def paper_trade(self, stocks):
+
+        
+
+        return
 
     # Prints the current wallet to the console
     def show(self, stocks):
@@ -62,11 +84,11 @@ class Wallet:
         for stock in self.stocks: print('{}\t{}\t${:2.2f}'.format(stock, self.stocks[stock]['amount'], self.stocks[stock]['amount'] * stocks.price(stock)))
         return
 
-stocks = StocksAPI(sys.argv[1])
-wallet = Wallet(1000.0)
 
-wallet.buy('AAPL', 1.0, 300.0)
 
-wallet.show(stocks)
 
-# print(stocks.get_history('AAPL', 'D', 1590988249, 1591852249))
+stocks = StocksAPI()
+wallet = Wallet(stocks.api.get_account())
+
+stocks.load('AAPL', 'day', limit=30)
+wallet.paper_trade(stocks.stocks)
