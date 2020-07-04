@@ -30,4 +30,5 @@ python3 tradingbot.py
 ## License
 
 Copyright (c) 2020 Icaro Freire
+
 MIT license
