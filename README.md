@@ -27,6 +27,8 @@ Now, just run the code
 $ python3 tradingbot.py
 ```
 
+<img src="https://github.com/ivfreire/tradingbot/blob/master/aapl_plot.png" width="100%" />
+
 ## License
 
 Copyright (c) 2020 Icaro Freire
