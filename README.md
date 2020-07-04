@@ -1,6 +1,8 @@
 # Trading-bot
 
-Trading bot is an automated piece of software for operating the US stock market, using mathematical analysis and machine-learning techniques.
+Trading bot is an automated piece of software for operating the US stock market using mathematical analysis and machine-learning techniques.
+
+Please note, this project is still under development.
 
 ## Instalation
 
