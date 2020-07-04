@@ -24,7 +24,7 @@ self.api = tradeapi.REST('API-KEY', 'API-SECRET-KEY', 'URL-ENDPOINT')
 Now, just run the code
 
 ```
-python3 tradingbot.py
+$ python3 tradingbot.py
 ```
 
 ## License
