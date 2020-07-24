@@ -1,256 +1,252 @@
-# Copyright (c) 2020 Icaro Freire
-
 import numpy as np
 import matplotlib.pyplot as plt
-import pandas as pd
-import time
-import datetime
-import alpaca_trade_api as alpaca
+import pandas as pandas
+import alpaca_trade_api as tradeapi
+# import tensorflow as tf
+from threading import Thread
+import json, time, importlib, math
+from datetime import datetime
+import trade_logic as logic
 
-# Machine-Learning controller   - Still under development
-class NeuralNetwork:
-    def __init__(self, inputs, layers, nodes, outputs):
-        self.inputs = np.zeros(inputs)
-        self.nodes = np.zeros((layers, nodes))
-        self.outputs = np.zeros(outputs)
-
-        self.biases = [np.zeros(inputs), np.zeros((layers, nodes)), np.zeros(outputs)]
-
-        self.links = []
-        self.links.append(np.zeros((inputs, nodes)))
-        for i in range(layers - 1): self.links.append(np.zeros((nodes, nodes)))
-        self.links.append(np.zeros((nodes, outputs)))
-
-        return
-
-# StocksAPI is the interface controller between the wallet of investiments and Alpaca API
-class StocksAPI:
-    def __init__(self, api_key, api_secret_key, endpoit):
-        self.api = alpaca.REST(api_key, api_secret_key, endpoit)
-        self.stocks = {}
+# Manages market data
+class StocksData():
+    def __init__(self, api):
+        self.api = api
         self.hist_data = {}
-
-        self.clock(self.api.get_clock())
-
-        if self.is_open:
-            today = datetime.date.today()
-            self.prev_open = pd.Timestamp(year=today.year, month=today.month, day=today.day, hour=9, minute=30, tz='US/Eastern').isoformat()
-            print(self.prev_open)
-
         return
 
-    # Get the market hours
-    def clock(self, clock):
+    def download_data(self, ticker, res, limit=None, start=None, end=None, after=None, until=None):
+        try:
+            barset = self.api.get_barset(ticker, timeframe=res, limit=limit, start=start, end=end, after=after, until=until)
+            stocks = { 'o': [], 'c': [], 'h': [], 'l': [], 'v': [], 't': [] }
+            for bar in barset[ticker]:
+                stocks['o'].append(bar.o)
+                stocks['c'].append(bar.c)
+                stocks['h'].append(bar.h)
+                stocks['l'].append(bar.l)
+                stocks['v'].append(bar.v)
+                stocks['t'].append(bar.t)
+            return stocks
+        except Exception as e:
+            print('Exception: {}'.format(e))
+        return
+
+    def load_data(self, ticker, res, limit=None, start=None, end=None, after=None, until=None):
+        self.hist_data[ticker] = self.download_data(ticker, res, limit=None, start=None, end=None, after=None, until=None)
+        return
+
+    def update_data(self, ticker, res, after):
+        stocks = self.download_data(ticker, res, after=after)
+        self.hist_data[ticker]['o'] += stocks['o']
+        self.hist_data[ticker]['c'] += stocks['c']
+        self.hist_data[ticker]['h'] += stocks['h']
+        self.hist_data[ticker]['l'] += stocks['l']
+        self.hist_data[ticker]['v'] += stocks['v']
+        self.hist_data[ticker]['t'] += stocks['t']
+        return
+
+'''
+    ORDER(
+        type,
+        limit_price,
+        execution
+    )
+'''
+# Controls bot's trading logic
+class TradingController(Thread):
+    def __init__(self, api, tradables):
+        super(TradingController, self).__init__()
+        self.api = api
+        self.tradables = tradables
+        self.portfolio = {}
+        self.orders = []
+        self.stocks = StocksData(api)
+        self.local_trading = False
+        self.sync()
+        return
+
+    def sync_account(self):
+        account = self.api.get_account()
+        self.buying_power = float(account.buying_power)
+        self.equity = float(account.equity)
+        self.currency = account.currency
+        return
+
+    def sync_clock(self):
+        clock = self.api.get_clock()
         self.is_open = clock.is_open
         self.next_open = clock.next_open
         self.next_close = clock.next_close
+        today = datetime.today()
+        self.prev_open = datetime(year=today.year, month=today.month, day=today.day, hour=9, minute=30)
         return
 
-    # Updates stocks
-    def update(self):
-        self.clock(self.api.get_clock())
+    def sync_equity(self):
+        for ticker in self.tradables:
+            try:
+                position = self.api.get_position(ticker)
+                self.portfolio[ticker] = {}
+                self.portfolio[ticker]['avg_entry_price'] = float(position.avg_entry_price)
+                self.portfolio[ticker]['current_price'] = float(position.current_price)
+                self.portfolio[ticker]['quantity'] = float(position.qty)
+            except Exception as e:
+                print('Exception: {}'.format(e))
         return
 
-    # Emits a bracket order to Alpaca API
-    def bracket_order(self, ticker, quantity, lifetime, take_profit, stop_loss):
-        self.api.submit_order(
-            symbol=ticker,
-            qty=quantity,
-            side='buy',
-            type='market',
-            order_class='bracket',
-            time_in_force=lifetime,
-            take_profit=take_profit,
-            stop_loss=stop_loss
-            )
+    def sync(self):
+        self.sync_account()
+        self.sync_clock()
+        self.sync_equity()
         return
 
-    # Gets the historical values of opening, closures, highes, lows, volume and timestamp of the specified stock
-    def get_history(self, ticker, resolution, start=None, end=None, limit=None, after=None, until=None):
-        barset = self.api.get_barset(ticker, resolution, limit, start, end, after, until)[ticker]
-        stocks = { 'o': [], 'c': [], 'h': [], 'l': [], 'v': [], 't': [] }
-        for bar in barset:
-            stocks['o'].append(bar.o)
-            stocks['c'].append(bar.c)
-            stocks['h'].append(bar.h)
-            stocks['l'].append(bar.l)
-            stocks['v'].append(bar.v)
-            stocks['t'].append(bar.t)
-        return stocks
-
-    # Load historical data
-    def load(self, ticker, resolution, start=None, end=None, limit=None, after=None, until=None):
-        stocks = self.get_history(ticker, resolution, start, end, limit, after, until)
-        self.hist_data[ticker] = stocks
+    def local_order(self, type, ticker, price, quantity):
+        if type == 'buy':
+            if self.buying_power >= price * quantity:
+                self.buying_power -= price * quantity
+                if ticker in self.portfolio:
+                    self.portfolio[ticker]['avg_entry_price'] = (self.portfolio[ticker]['avg_entry_price'] * self.portfolio[ticker]['quantity'] + price * quantity) / (self.portfolio[ticker]['quantity'] + quantity)
+                    self.portfolio[ticker]['quantity'] += quantity
+                    self.portfolio[ticker]['current_price'] = price
+                else:
+                    self.portfolio[ticker] = {
+                        'avg_entry_price': price,
+                        'quantity': quantity,
+                        'current_price': price
+                    }
+        elif type == 'sell':
+            if ticker in self.portfolio:
+                if self.portfolio[ticker]['quantity'] >= quantity:
+                    self.buying_power += price * quantity
+                    self.portfolio[ticker]['quantity'] -= quantity
+                    self.portfolio[ticker]['current_price'] = price
         return
 
-    # Returns the current price of the specified stock. Usage on realtime mode only.
-    def price(self, ticker):
-        return 300
-
-# Wallet is the class that controls the balance and stocks owned
-class Wallet:
-    def __init__(self, account=None):
-        self.get_account(account)
-        self.stocks = {}
-        self.paper_trading = True
-
-        self.tradable = []
+    '''
+        take_profit
+            limit_price
+        stop_loss
+            stop_price
+            limit_price
+    '''
+    def local_bracket(self, ticker, price, quantity, specs):
+        exec_id = len(self.orders)
+        self.orders.append(['buy', ticker, price, quantity, 'instant', False, None, exec_id])
+        self.orders.append(['sell', ticker, specs['take_profit']['limit_price'], quantity, 'conditional', False, 'profit', exec_id + 1])
+        self.orders.append(['sell', ticker, specs['stop_loss']['limit_price'], quantity, 'conditional', False, 'loss', exec_id + 1])
         return
 
-    # Updates wallet during paper or live trading
-    def update(self, api):
-        self.get_account(api.get_account())
-        self.get_watchlists(api)
-        self.get_position(self.tradable, api)
+    def execute_orders(self, t):
+        for order in self.orders:
+            if order[5] == False:
+                if order[4] == 'instant':
+                    self.local_order(order[0], order[1], order[2], order[3])
+                    order[5] = True
+                elif order[4] == 'conditional':
+                    if order[6] == 'loss':
+                        if self.stocks.hist_data[order[1]]['c'][t] <= order[2]:
+                            self.local_order(order[0], order[1], order[2], order[3])
+                            order[5] = True
+                    if order[6] == 'profit':
+                        if self.stocks.hist_data[order[1]]['c'][t] >= order[2]:
+                            self.local_order(order[0], order[1], order[2], order[3])
+                            order[5] = True
+                    '''for i in range(len(self.orders)):
+                        if order[7] == self.orders[i][7]: print(order[7])'''
+
         return
 
-    # Updates stocks prices
-    def update_prices(self, stocks):
-        for stock in self.stocks:
-            if stock in stocks: self.stocks[stock]['current_price'] = stocks[stock].current_price
+    def paper_trade(self):
+        for ticker in self.tradables: self.stocks.load_data(ticker, '1Min', after=self.prev_open)
+
+        while self.is_open:
+            for ticker in self.tradables:
+                self.stocks.update_data(ticker, '1Min', after=self.stocks.hist_data[ticker]['t'][-1].isoformat())
+                price = self.stocks.hist_data[ticker]['c'][-1]
+                if self.buying_power > 0:
+                    qty = math.floor(self.buying_power / (len(self.tradables) * price))
+                    if qty > 0:
+                        try:
+                            self.api.submit_order(
+                                symbol=ticker,
+                                qty=qty,
+                                side='buy',
+                                type='market',
+                                time_in_force='gtc',
+                                take_profit={
+                                    'limit_price': price * 1.005
+                                },
+                                stop_loss={
+                                    'stop_price': price * 0.99,
+                                    'limit_price': price * 0.98
+                                }
+                            )
+                            print('Bought {} stocks of {} for {} each.'.format(qty, ticker, price))
+                        except Exception as e:
+                            print('Exception: {}'.format(e))
+            self.sync()
+            time.sleep(60)
+
         return
 
-    # Sync local wallet to Alpaca's
-    def get_account(self, account):
-        if account != None:
-            self.buying_power = float(account.buying_power)
-            self.currency = account.currency
-            self.equity = float(account.equity)
-            self.last_equity = float(account.last_equity)
-        else:
-            self.buying_power = 0.0
-            self.currency = 'USD'
-            self.equity = 0.0
-            self.last_equity = 0.0
-        return
+    def local_trade(self):
+        self.local_trading = True
 
-    # Gets the watchlist stocks on Alpaca
-    def get_watchlists(self, api):
-        self.watchlists = []
-        watchlists = api.get_watchlists()
-        for wl in watchlists:
-            self.watchlists.append(api.get_watchlist(wl.id))
-            watchlist = self.watchlists[-1]
-            for asset in watchlist.assets: self.tradable.append(asset['symbol'])
-        return
+        limit = 350
+        for ticker in self.tradables: self.stocks.load_data(ticker, '1Min', limit=limit)
 
-    # Gets the current positions in stocks
-    def get_position(self, tickers=None, api=None):
-        if tickers != None:
-            for ticker in tickers:
-                position = api.get_position(ticker)
-                self.stocks[ticker] = {
-                    'avg_entry_price': float(position.avg_entry_price),
-                    'quantity': float(position.qty),
-                    'current_price': float(position.current_price)
-                }
-        return
-
-    # Returns the position invested in the specified stock
-    def position(self, ticker):
-        if ticker in self.stocks: return self.stocks[ticker]['quantity'] * self.stocks[ticker]['current_price']
-        return
-
-    # Returns the profit made by a transaction 
-    def profit(self, ticker):
-        if ticker in self.stocks: return self.stocks[ticker]['quantity'] * (self.stocks[ticker]['current_price'] - self.stocks[ticker]['avg_entry_price'])
-        return 0.0
-
-    # Gets the total equity of our wallet
-    def get_equity(self):
-        total = self.buying_power
-        for stock in self.stocks: total += self.stocks[stock]['quantity'] * self.stocks[stock]['current_price']
-        return total
-
-    # Add the stock bought to our wallet and discounts the transaction money from our buying_power
-    def buy(self, ticker, quantity, price):
-        if self.buying_power >= quantity * price:
-            if ticker in self.stocks:
-                self.stocks[ticker]['avg_entry_price'] = (self.stocks[ticker]['quantity'] * self.stocks[ticker]['avg_entry_price'] + quantity * price) / (self.stocks[ticker]['quantity'] + quantity)
-                self.stocks[ticker]['quantity'] += quantity
-            else: self.stocks[ticker] = {
-                'quantity': quantity,
-                'avg_entry_price': price,
-                'current_price': price
-            }
-            self.buying_power -= quantity * price
-        else: return False
-        return
-
-    # Removes the quantity specified from the specified stock and accounts for the money earned in the transaction
-    def sell(self, ticker, quantity, price):
-        if ticker in self.stocks:
-            if self.stocks[ticker]['quantity'] < quantity: quantity = self.stocks[ticker]['quantity']
-            self.stocks[ticker]['quantity'] -= quantity
-            self.buying_power += quantity * price
-            return
-        return False
-
-    # Prints the current wallet to the console
-    def show(self):
-        print('WALLET')
-        print('Money\t{} {:.2f}'.format(self.currency, self.buying_power))
-        for stock in self.stocks: print('{}\t{} {:2.2f}\t{}\t'.format(stock, self.currency, self.stocks[stock]['quantity'] * self.stocks[stock]['current_price'], self.stocks[stock]['quantity']))
-        print('Equity\t{} {:.2f}'.format(self.currency, self.get_equity()))
-        return
-
-# Controls transactions
-class TradeAPI:
-    def __init__(self):
-        self.refresh_rate = 60
-        return
-
-    def mov_avg(self, arr, width, n):
-        value = 0.0
-        if width > n: width = n
-        if width == 0: width = 1
-        for i in range(width): value += arr[n - i] / width
-        return value
-    def is_inc(self, arr, n):
-        if n > 0:
-            if arr[n] > arr[n - 1]: return True
-        return False
-    def crossed(self, arr, _arr, i):
-        if i > 0:
-            diff = arr[i] - _arr[i]
-            _diff = arr[i - 1] - _arr[i - 1]
-            if np.sign(diff) != np.sign(_diff): return True
-        return False
-
-    # Trades using historical market data
-    def local_trade(self, wallet, stocks):
-        return
-
-    # Emulates trading
-    def paper_trade(self, stocks):
-        if stocks.is_open:
-            print('Stocks market is currently open until {}.'.format(stocks.next_close))
-            wallet = Wallet(stocks.api.get_account())
-            wallet.get_watchlists(stocks.api)
-            while stocks.is_open:
-                for ticker in wallet.tradable:
-                    stocks.load(ticker, 'minute', after=stocks.prev_open)
-                    if ticker not in wallet.stocks:
-                        stocks.bracket_order(
-                            ticker,
-                            100,
-                            'day',
-                            {
-                                'limit_price': str(stocks.hist_data[ticker]['c'][-1] * 1.05)
+        for t in range(len(self.stocks.hist_data[self.tradables[0]]['t'])):
+            for ticker in self.tradables:
+                price = self.stocks.hist_data[ticker]['c'][t]
+                if self.buying_power > 0:
+                    self.local_bracket(
+                        ticker,
+                        price,
+                        self.buying_power / (len(self.tradables) * price),
+                        {
+                            'take_profit': {
+                                'limit_price': price * 1.01
                             },
-                            {
-                                'limit_price': str(stocks.hist_data[ticker]['c'][-1] / 1.05),
-                                'stop_price': str(stocks.hist_data[ticker]['c'][-1] / 1.01) 
-                            })
-                stocks.update()
-                wallet.update(stocks.api)
-                time.sleep(self.refresh_rate)
-        else: print('Stocks market is currently closed! You can use local trade instead or wait utill {} to start paper-trading! :)'.format(stocks.next_open))
+                            'stop_loss': {
+                                'stop_price': price * 0.99,
+                                'limit_price': price * 0.98
+                            }
+                        }
+                    )
+            self.execute_orders(t)
+            print(self.orders)
         return
 
+    def run(self):
+        while self.is_alive:
+            try:
+                if self.is_open:
+                    self.paper_trade()
+            except Exception as e:
+                print('Exception: {}'.format(e))
+        return
 
-stocks = StocksAPI('API-KEY', 'API-SECRET-KEY', 'URL-ENDPOINT')
-trade = TradeAPI()
+# Main controller
+class Controller():
+    def __init__(self):
+        if self.load_config('./config.json'):
+            self.api = tradeapi.REST(self.config['auth']['api_key'], self.config['auth']['secret_key'], self.config['auth']['endpoint'])
+            print('Logged to Alpaca successfully!')
+            self.tradectl = TradingController(self.api, self.config['tradables'])
+            self.tradectl.start()
+        else: print('Bot is not setup properly.')
+        return
 
-trade.paper_trade(stocks)
+    def load_config(self, path):
+        with open(path, 'r') as file:
+            try:
+                self.config = json.loads(file.read())
+                return True
+            except Exception as e:
+                print('Exception: {}'.format(e))
+                return False
+
+    def close(self):
+        self.tradectl.join()
+
+controller = Controller()
+controller.close()
