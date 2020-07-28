@@ -207,6 +207,7 @@ class PaperTrader():
 
     def trade(self):
         while self.is_open:
+            importlib.reload(logic)
             acts = logic.braket_trading(self.buying_power, self.portfolio, self.stocks, -1, (1.02, 0.98))
             for act in acts:
                 try:
@@ -214,7 +215,7 @@ class PaperTrader():
                     print('Bought {} stocks of {} for {}'.format(act['quantity'], act['symbol'], act['price']))
                 except Exception as e: print('Exception on buying: {}'.format(e))
             self.sync()
-            utils.log('Equity: {}'.format(self.equity))
+            utils.log('{}\t{}'.format(datetime.now().isoformat(), self.equity))
             time.sleep(self.refresh_rate)
         return
 
@@ -234,6 +235,7 @@ class TradingController():
         utils.log('Market is open')
         utils.log('Started paper trade.')
         paper_trade = PaperTrader(self.api, self.tradables)
+        paper_trade.refresh_rate = 1
         paper_trade.trade()
         return
 
