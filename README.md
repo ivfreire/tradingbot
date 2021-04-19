@@ -4,7 +4,7 @@
 
 This project is a bot that automatically operates in the US Stocks Market to make profit. Created with Python and [Alpaca paper-trading](https://alpaca.markets/).
 
-My goal as a developer with this project is to learn more about applied mathematics to financial systems. Please note, this repo is still under development, thus some bugs might exists and it not completely functional yet.
+My goal as a developer with this project is to learn more about applied mathematics to financial systems. Please note, this repo is still under development, thus some bugs might exists and it is not completely functional yet.
 
 ## Instalation
 
