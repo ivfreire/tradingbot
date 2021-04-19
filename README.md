@@ -1,8 +1,10 @@
-# Trading-bot
+# Tradingbot
 
-Trading bot is an automated piece of software for operating the US stock market using mathematical analysis and machine-learning techniques.
+<img src="images/alpaca.png" width="100px" align="right"/>
 
-Please note, this project is still under development. Machine-learning coming soon! :)
+This project is a bot that automatically operates in the US Stocks Market to make profit. Created with Python and [Alpaca paper-trading](https://alpaca.markets/).
+
+My goal as a developer with this project is to learn more about applied mathematics to financial systems. Please note, this repo is still under development, thus some bugs might exists and it not completely functional yet.
 
 ## Instalation
 
@@ -29,7 +31,7 @@ Now, just run the code
 $ python3 tradingbot.py
 ```
 
-<img src="https://github.com/ivfreire/tradingbot/blob/master/aapl_plot.png" width="100%" />
+<img src="images/aapl_plot.png" width="80%" />
 
 ## License
 
