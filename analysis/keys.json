@@ -1,0 +1,5 @@
+{
+	"api_key": "API KEY here",
+	"api_secret_key": "API SECRET KEY here",
+	"api_endpoint": "https://paper-api.alpaca.markets"
+}
